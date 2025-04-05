@@ -61,7 +61,6 @@ local case_type = {
 local function check_casing(line, lo, hi)
   -- This will also be true for not letters
   local first_char = line:sub(lo, lo)
-  log.echo(first_char)
   local first_char_upper = first_char == first_char:upper()
 
   -- Handle single letter match
