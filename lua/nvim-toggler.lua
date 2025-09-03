@@ -151,71 +151,90 @@ end
 --   2. current line contains `word`.
 --   3. cursor is on that `word` in the current line.
 function app:toggle()
-  local line, cursor = vim.fn.getline('.'), vim.fn.col('.')
+  local line = vim.fn.getline('.')
+  local cursor = vim.fn.col('.')
   local byte = line:byte(cursor)
   local results = {}
+
+  -- Parcours toutes les paires mot/inverse
   for word, inverse in pairs(self.inv_tbl.data) do
-    if
-      app.opts.smart_case_matching
-      and self.inv_tbl_metadata[word].has_only_lower_case
-    then
+    local metadata = self.inv_tbl_metadata[word]
+    local use_smart_case = app.opts.smart_case_matching and metadata and metadata.has_only_lower_case
+
+    if use_smart_case then
       local line_lower = line:lower()
-      -- Checks if the iterated word contains the character under cursor.
       if contains_byte(word, line_lower:byte(cursor)) then
         local lo, hi = surround(line_lower, word, cursor)
         if lo and hi and lo <= cursor and cursor <= hi then
-          -- We have a match, so now check casing
-          local type = check_casing(line, lo, hi)
-          if type ~= case_type.other then
-            if type == case_type.upper then
-              inverse = inverse:upper()
-            elseif type == case_type.sentence then
-              inverse = inverse:sub(1, 1):upper() .. inverse:sub(2, -1)
+          local casing = check_casing(line, lo, hi)
+          if casing ~= case_type.other then
+            local formatted_inverse = inverse
+            if casing == case_type.upper then
+              formatted_inverse = inverse:upper()
+            elseif casing == case_type.sentence then
+              formatted_inverse = inverse:sub(1, 1):upper() .. inverse:sub(2)
             end
-            table.insert(
-              results,
-              { lo = lo, hi = hi, inverse = inverse, word = word }
-            )
+            table.insert(results, {
+              lo = lo,
+              hi = hi,
+              inverse = formatted_inverse,
+              word = word,
+            })
           end
         end
       end
     else
-      -- Checks if the iterated word contains the character under cursor.
       if contains_byte(word, byte) then
         local lo, hi = surround(line, word, cursor)
-        if lo and lo <= cursor and cursor <= hi then
-          table.insert(
-            results,
-            { lo = lo, hi = hi, inverse = inverse, word = word }
-          )
+        if lo and hi and lo <= cursor and cursor <= hi then
+          table.insert(results, {
+            lo = lo,
+            hi = hi,
+            inverse = inverse,
+            word = word,
+          })
         end
       end
     end
   end
-  if #results == 0 then return log.warn('unsupported value.') end
-  if #results == 1 then return self.sub(line, results[1]) end
-  -- handle multiple results (`results` is guaranteed >= 2 entries from here)
-  table.sort(results, function(a, b) return #a.word > #b.word end)
-  if
-    #results[1].word > #results[2].word and app.opts.autoselect_longest_match
-  then
-    return app.sub(line, results[1])
+
+  -- Aucun résultat trouvé
+  if #results == 0 then
+    return log.warn('unsupported value.')
   end
-  local prompt, fmt = {}, '[%d] %s -> %s'
-  for i, result in ipairs(results) do
-    table.insert(prompt, fmt:format(i, result.word, result.inverse))
+
+  -- Un seul résultat : on applique directement
+  if #results == 1 then
+    return self.sub(line, results[1])
   end
-  table.insert(prompt, '[?] > ')
-  local input = vim.fn.input(table.concat(prompt, '\n'))
-  vim.cmd('redraw!')
-  if input == nil or input == '' then return log.echo('nothing happened.') end
-  local result = results[input:byte(1) - 48]
-  if result then
-    app.sub(line, result)
-    log.echo(('%s -> %s'):format(result.word, result.inverse))
-  else
-    log.echo('nothing happened.')
+
+  -- Plusieurs résultats : tri par longueur (du plus long au plus court)
+  table.sort(results, function(a, b)
+    return #a.word > #b.word
+  end)
+
+  -- Sélection automatique si le plus long est clairement dominant
+  if app.opts.autoselect_longest_match and #results >= 2 then
+    if #results[1].word > #results[2].word then
+      return self.sub(line, results[1])
+    end
   end
+
+  -- Utilisation de vim.ui.select pour choisir
+  vim.ui.select(results, {
+    prompt = 'Choisissez une substitution:',
+    format_item = function(result)
+      return string.format('%s → %s', result.word, result.inverse)
+    end,
+  }, function(choice)
+    if not choice then
+      return log.echo('Aucun choix effectué.')
+    end
+    -- Récupérer la ligne actuelle (au cas où elle a changé)
+    local current_line = vim.fn.getline('.')
+    self.sub(current_line, choice)
+    log.echo(('Toggled: %s → %s'):format(choice.word, choice.inverse))
+  end)
 end
 
 function app:setup(opts)
